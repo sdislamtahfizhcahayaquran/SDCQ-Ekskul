@@ -1,760 +1,1399 @@
-const CONFIG = Object.freeze({
-  SCHOOL_NAME: "SD Islam Tahfizh Cahaya Qur'an",
-  SHEET_SISWA: "Master_Siswa",
-  SHEET_EKSKUL: "Master_Ekskul",
-  SHEET_PENDAFTARAN: "Pendaftaran",
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
 
-  // PENTING: ubah dua nilai ini setiap pergantian tahun ajaran / semester.
-  TAHUN_AJARAN: "2026/2027",
-  SEMESTER: "Ganjil",
+  <title>Pendaftaran Ekstrakurikuler</title>
 
-  STATUS_BARU: "Pendaftar Baru",
-  STATUS_LANJUT: "Melanjutkan Ekskul",
+  <style>
+    :root {
+      --emerald-900: #174b39;
+      --emerald-800: #1f644a;
+      --emerald-700: #2a7c59;
+      --emerald-600: #36966c;
+      --emerald-100: #dff2e8;
+      --emerald-50: #eff9f4;
 
-  CACHE_INITIAL_KEY: "EKSKUL_INITIAL_V2",
-  CACHE_SECONDS: 120,
+      --sky-700: #3d8fb3;
+      --sky-600: #58a9cc;
+      --sky-100: #dff1f8;
+      --sky-50: #f0f9fc;
 
-  HEADERS_PENDAFTARAN: [
-    "Timestamp",
-    "NIS",
-    "Nama Siswa",
-    "Kelas",
-    "Status Pendaftaran",
-    "Ekskul",
-    "Kuota Awal",
-    "Sisa Kuota",
-    "Biaya Pendaftaran",
-    "Biaya Semester",
-    "Total Pembayaran",
-    "Tahun Ajaran",
-    "Semester",
-    "Status Pembayaran"
-  ]
-});
+      --lime-600: #91b83d;
+      --lime-100: #eaf3d7;
 
+      --gold-600: #b99747;
+      --gold-100: #f5edd8;
 
-/* =========================================================
- * ENTRY POINTS WEB APP (API MODE)
- * =========================================================
- * doGet   -> dipakai untuk MENGAMBIL data (getInitialData)
- *            dipanggil dari frontend pakai: fetch(URL + "?action=getInitialData")
- * doPost  -> dipakai untuk MENGIRIM data (submitRegistration, clearCache)
- *            dipanggil dari frontend pakai: fetch(URL, { method: "POST", ... })
- *
- * PENTING soal CORS:
- * - Request GET dari browser TIDAK memicu preflight, jadi aman.
- * - Request POST harus dikirim dengan header
- *     Content-Type: "text/plain;charset=utf-8"
- *   (BUKAN application/json), supaya browser tidak mengirim
- *   preflight OPTIONS yang tidak didukung Apps Script.
- *   Body-nya tetap teks JSON biasa, nanti di-parse manual di doPost().
- * ========================================================= */
+      --ink: #17312a;
+      --muted: #688078;
+      --line: #d6e7df;
+      --white: #ffffff;
+      --surface: rgba(255, 255, 255, 0.91);
+      --danger: #b84646;
+      --danger-soft: #fff0f0;
+      --success: #177952;
+      --success-soft: #eaf8f1;
 
-function doGet(e) {
-  try {
-    const action = (e && e.parameter && e.parameter.action) || "getInitialData";
+      --shadow: 0 22px 55px rgba(24, 75, 57, 0.12);
+      --shadow-soft: 0 12px 32px rgba(24, 75, 57, 0.08);
 
-    if (action === "ping") {
-      return jsonResponse({ success: true, message: "pong" });
+      --radius-xl: 30px;
+      --radius-lg: 22px;
+      --radius-md: 17px;
+      --radius-sm: 13px;
     }
 
-    if (action === "getEkskulDetail") {
-      const nama = e.parameter.nama || "";
-      const detail = getEkskulDetail(nama);
-      return jsonResponse({ success: true, data: detail });
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+
+    body {
+      min-height: 100vh;
+      margin: 0;
+      overflow-x: hidden;
+      color: var(--ink);
+      font-family: Inter, "Segoe UI", Arial, sans-serif;
+      background:
+        radial-gradient(circle at 8% 2%, rgba(145, 184, 61, 0.20), transparent 24rem),
+        radial-gradient(circle at 95% 0%, rgba(88, 169, 204, 0.18), transparent 26rem),
+        linear-gradient(180deg, #f8fcfa 0%, #eef8f4 100%);
     }
 
-    // default: getInitialData
-    const forceRefresh = e.parameter.forceRefresh === "true";
-    const data = getInitialData(forceRefresh);
-    return jsonResponse({ success: true, data: data });
+    body.modal-open { overflow: hidden; }
+    button, select { font: inherit; }
+    button { -webkit-tap-highlight-color: transparent; }
 
-  } catch (error) {
-    return jsonResponse({
-      success: false,
-      message: error && error.message ? error.message : "Terjadi kesalahan."
-    });
-  }
-}
-
-
-function doPost(e) {
-  try {
-    if (!e || !e.postData || !e.postData.contents) {
-      throw new Error("Request tidak berisi data.");
+    .page {
+      position: relative;
+      min-height: 100vh;
+      padding: 22px;
+      isolation: isolate;
     }
 
-    const body = JSON.parse(e.postData.contents);
-    const action = body.action;
-
-    if (action === "submitRegistration") {
-      const result = submitRegistration(body.payload || {});
-      return jsonResponse(result);
+    .page::before,
+    .page::after {
+      content: "";
+      position: fixed;
+      z-index: -1;
+      width: 420px;
+      height: 420px;
+      border: 1px solid rgba(54, 150, 108, 0.09);
+      border-radius: 90px;
+      transform: rotate(45deg);
+      pointer-events: none;
     }
 
-    if (action === "clearCache") {
-      const message = clearDataCache();
-      return jsonResponse({ success: true, message: message });
+    .page::before { top: 160px; left: -300px; }
+    .page::after { right: -315px; bottom: 60px; }
+
+    .container { width: min(1180px, 100%); margin: 0 auto; }
+
+    .topbar {
+      display: flex;
+      min-height: 76px;
+      margin-bottom: 18px;
+      padding: 11px 16px;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      border: 1px solid rgba(214, 231, 223, 0.9);
+      border-radius: 22px;
+      background: rgba(255, 255, 255, 0.78);
+      box-shadow: var(--shadow-soft);
+      backdrop-filter: blur(16px);
     }
 
-    throw new Error("Action tidak dikenali: " + action);
+    .school-brand { display: flex; min-width: 0; align-items: center; gap: 13px; }
 
-  } catch (error) {
-    return jsonResponse({
-      success: false,
-      message: error && error.message ? error.message : "Pendaftaran gagal disimpan."
-    });
-  }
-}
-
-
-/**
- * Helper untuk selalu mengembalikan JSON dengan format konsisten.
- * ContentService dari Apps Script Web App otomatis mengizinkan
- * akses cross-origin untuk response ini, jadi bisa dipanggil
- * dari domain lain (misalnya GitHub Pages) tanpa masalah CORS
- * selama request-nya GET, atau POST dengan Content-Type text/plain.
- */
-function jsonResponse(obj) {
-  return ContentService
-    .createTextOutput(JSON.stringify(obj))
-    .setMimeType(ContentService.MimeType.JSON);
-}
-
-
-/**
- * Mengambil seluruh data awal dalam satu kali proses.
- * Hasil disimpan sementara di cache agar permintaan berikutnya jauh lebih cepat.
- */
-function getInitialData(forceRefresh) {
-  const cache = CacheService.getScriptCache();
-
-  if (!forceRefresh) {
-    const cached = cache.get(CONFIG.CACHE_INITIAL_KEY);
-
-    if (cached) {
-      try {
-        return JSON.parse(cached);
-      } catch (error) {
-        cache.remove(CONFIG.CACHE_INITIAL_KEY);
-      }
-    }
-  }
-
-  ensureRegistrationSheet();
-
-  const students = getStudentRecords();
-  const studentsByClass = {};
-  const classSet = new Set();
-
-  students.forEach(student => {
-    classSet.add(student.kelas);
-
-    if (!studentsByClass[student.kelas]) {
-      studentsByClass[student.kelas] = [];
+    .school-logo {
+      display: grid;
+      width: 54px;
+      height: 54px;
+      flex: 0 0 54px;
+      place-items: center;
+      overflow: hidden;
+      border-radius: 16px;
+      background: #fff;
+      border: 1px solid var(--line);
+      color: var(--emerald-700);
+      font-weight: 900;
     }
 
-    studentsByClass[student.kelas].push({
-      nis: student.nis,
-      nama: student.nama
-    });
-  });
+    .school-name { min-width: 0; }
 
-  Object.keys(studentsByClass).forEach(kelas => {
-    studentsByClass[kelas].sort((a, b) =>
-      a.nama.localeCompare(b.nama, "id")
-    );
-  });
-
-  const registrationRows = getRegistrationRows();
-  const counts = buildRegistrationCountMap(registrationRows);
-
-  const data = {
-    schoolName: CONFIG.SCHOOL_NAME,
-    tahunAjaran: CONFIG.TAHUN_AJARAN,
-    semester: CONFIG.SEMESTER,
-
-    kelas: [...classSet].sort((a, b) =>
-      a.localeCompare(b, "id", {
-        numeric: true,
-        sensitivity: "base"
-      })
-    ),
-
-    studentsByClass: studentsByClass,
-
-    ekskul: getEkskulRecords()
-      .filter(item => item.aktif)
-      .map(item => {
-        const jumlahTerdaftar = counts[normalizeKey(item.nama)] || 0;
-
-        return {
-          nama: item.nama,
-          kuota: item.kuota,
-          jumlahTerdaftar: jumlahTerdaftar,
-          sisaKuota: Math.max(item.kuota - jumlahTerdaftar, 0),
-          jumlahKbm: item.jumlahKbm,
-          biayaPendaftaran: item.biayaPendaftaran,
-          biayaSemester: item.biayaSemester,
-          hari: item.hari,
-          waktu: item.waktu,
-          lokasi: item.lokasi
-        };
-      })
-      .sort((a, b) => a.nama.localeCompare(b.nama, "id"))
-  };
-
-  try {
-    cache.put(
-      CONFIG.CACHE_INITIAL_KEY,
-      JSON.stringify(data),
-      CONFIG.CACHE_SECONDS
-    );
-  } catch (error) {
-    // Form tetap bekerja meskipun cache sementara gagal disimpan.
-  }
-
-  return data;
-}
-
-
-function getStudentRecords() {
-  const sheet = getSheetOrThrow(CONFIG.SHEET_SISWA);
-  const values = sheet.getDataRange().getDisplayValues();
-
-  if (values.length < 2) {
-    return [];
-  }
-
-  const headers = values[0];
-  const nisIndex = findColumn(headers, ["NIS"]);
-  const nameIndex = findColumn(headers, ["Nama Siswa", "Nama"]);
-  const classIndex = findColumn(headers, ["Kelas"]);
-
-  return values
-    .slice(1)
-    .map(row => ({
-      nis: cleanText(row[nisIndex]),
-      nama: cleanText(row[nameIndex]),
-      kelas: cleanText(row[classIndex])
-    }))
-    .filter(student =>
-      student.nis &&
-      student.nama &&
-      student.kelas
-    );
-}
-
-
-function getEkskulDetail(namaEkskul) {
-  ensureRegistrationSheet();
-
-  const ekskul = findEkskulRecord(namaEkskul);
-
-  if (!ekskul) {
-    throw new Error("Data ekstrakurikuler tidak ditemukan.");
-  }
-
-  if (!ekskul.aktif) {
-    throw new Error("Ekstrakurikuler sedang tidak aktif.");
-  }
-
-  const jumlahTerdaftar = countRegistrations(ekskul.nama);
-  const sisaKuota = Math.max(ekskul.kuota - jumlahTerdaftar, 0);
-
-  return {
-    nama: ekskul.nama,
-    kuota: ekskul.kuota,
-    jumlahTerdaftar: jumlahTerdaftar,
-    sisaKuota: sisaKuota,
-    jumlahKbm: ekskul.jumlahKbm,
-    biayaPendaftaran: ekskul.biayaPendaftaran,
-    biayaSemester: ekskul.biayaSemester,
-    hari: ekskul.hari,
-    waktu: ekskul.waktu,
-    lokasi: ekskul.lokasi
-  };
-}
-
-
-/**
- * Menyimpan pendaftaran secara aman.
- * Kuota, duplikasi, siswa, dan biaya selalu divalidasi ulang di server.
- */
-function submitRegistration(formData) {
-  const lock = LockService.getScriptLock();
-  let hasLock = false;
-
-  try {
-    lock.waitLock(30000);
-    hasLock = true;
-
-    ensureRegistrationSheet();
-
-    const nis = cleanText(formData && formData.nis);
-    const status = cleanText(formData && formData.status);
-    const namaEkskul = cleanText(formData && formData.ekskul);
-
-    if (!nis) {
-      throw new Error("Silakan pilih nama siswa.");
+    .school-name strong {
+      display: block;
+      overflow: hidden;
+      color: var(--emerald-900);
+      font-size: 15px;
+      line-height: 1.25;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
 
-    if (!namaEkskul) {
-      throw new Error("Silakan pilih ekstrakurikuler.");
+    .school-name span {
+      display: block;
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
     }
 
-    if (![CONFIG.STATUS_BARU, CONFIG.STATUS_LANJUT].includes(status)) {
-      throw new Error("Status pendaftaran tidak valid.");
+    .period-chip {
+      display: flex;
+      flex: 0 0 auto;
+      padding: 10px 13px;
+      align-items: center;
+      gap: 8px;
+      border: 1px solid #d4eadf;
+      border-radius: 999px;
+      background: var(--emerald-50);
+      color: var(--emerald-800);
+      font-size: 12px;
+      font-weight: 800;
     }
 
-    const student = findStudentByNis(nis);
-
-    if (!student) {
-      throw new Error("Data siswa tidak ditemukan pada Master_Siswa.");
+    .period-chip::before {
+      content: "";
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--lime-600);
+      box-shadow: 0 0 0 4px rgba(145, 184, 61, 0.15);
     }
 
-    const ekskul = findEkskulRecord(namaEkskul);
-
-    if (!ekskul) {
-      throw new Error("Data ekstrakurikuler tidak ditemukan.");
+    .hero {
+      position: relative;
+      overflow: hidden;
+      padding: 36px;
+      border-radius: var(--radius-xl);
+      background: linear-gradient(135deg, rgba(31, 100, 74, 0.98), rgba(61, 143, 179, 0.95));
+      color: #fff;
+      box-shadow: var(--shadow);
+      isolation: isolate;
     }
 
-    if (!ekskul.aktif) {
-      throw new Error("Ekstrakurikuler sedang tidak menerima pendaftaran.");
+    .hero::before {
+      content: "";
+      position: absolute;
+      z-index: -1;
+      inset: 0;
+      opacity: 0.48;
+      background-image:
+        linear-gradient(30deg, rgba(255,255,255,.08) 12%, transparent 12.5%, transparent 87%, rgba(255,255,255,.08) 87.5%),
+        linear-gradient(150deg, rgba(255,255,255,.08) 12%, transparent 12.5%, transparent 87%, rgba(255,255,255,.08) 87.5%),
+        linear-gradient(30deg, rgba(255,255,255,.08) 12%, transparent 12.5%, transparent 87%, rgba(255,255,255,.08) 87.5%),
+        linear-gradient(150deg, rgba(255,255,255,.08) 12%, transparent 12.5%, transparent 87%, rgba(255,255,255,.08) 87.5%),
+        linear-gradient(60deg, rgba(255,255,255,.045) 25%, transparent 25.5%, transparent 75%, rgba(255,255,255,.045) 75%);
+      background-position: 0 0, 0 0, 28px 49px, 28px 49px, 0 0;
+      background-size: 56px 98px;
     }
 
-    if (isDuplicateRegistration(student.nis, ekskul.nama)) {
-      throw new Error(
-        student.nama +
-        " sudah terdaftar pada " +
-        ekskul.nama +
-        " untuk " +
-        CONFIG.SEMESTER +
-        " " +
-        CONFIG.TAHUN_AJARAN +
-        "."
-      );
+    .hero::after {
+      content: "";
+      position: absolute;
+      z-index: -1;
+      right: -120px;
+      top: -140px;
+      width: 420px;
+      height: 420px;
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      border-radius: 105px;
+      background: rgba(255, 255, 255, 0.05);
+      transform: rotate(45deg);
     }
 
-    const jumlahTerdaftar = countRegistrations(ekskul.nama);
-    const sisaSebelumDaftar = ekskul.kuota - jumlahTerdaftar;
-
-    if (sisaSebelumDaftar <= 0) {
-      throw new Error(
-        "Kuota " + ekskul.nama + " sudah penuh. Silakan pilih ekskul lain."
-      );
+    .hero-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.16fr) minmax(280px, 0.84fr);
+      gap: 28px;
+      align-items: center;
     }
 
-    const biayaPendaftaran =
-      status === CONFIG.STATUS_BARU
-        ? ekskul.biayaPendaftaran
-        : 0;
+    .hero-kicker {
+      display: inline-flex;
+      margin-bottom: 14px;
+      padding: 7px 12px;
+      align-items: center;
+      gap: 8px;
+      border: 1px solid rgba(255, 255, 255, 0.22);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.11);
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
 
-    const biayaSemester = ekskul.biayaSemester;
-    const totalPembayaran = biayaPendaftaran + biayaSemester;
-    const sisaSetelahDaftar = sisaSebelumDaftar - 1;
+    .hero h1 {
+      max-width: 760px;
+      margin: 0;
+      font-size: clamp(31px, 5vw, 50px);
+      font-weight: 850;
+      letter-spacing: -0.04em;
+      line-height: 1.03;
+    }
 
-    const data = {
-      "Timestamp": new Date(),
-      "NIS": student.nis,
-      "Nama Siswa": student.nama,
-      "Kelas": student.kelas,
-      "Status Pendaftaran": status,
-      "Ekskul": ekskul.nama,
-      "Kuota Awal": ekskul.kuota,
-      "Sisa Kuota": sisaSetelahDaftar,
-      "Biaya Pendaftaran": biayaPendaftaran,
-      "Biaya Semester": biayaSemester,
-      "Total Pembayaran": totalPembayaran,
-      "Tahun Ajaran": CONFIG.TAHUN_AJARAN,
-      "Semester": CONFIG.SEMESTER,
-      "Status Pembayaran": "Belum Bayar"
+    .hero-copy {
+      max-width: 710px;
+      margin: 15px 0 0;
+      color: rgba(255, 255, 255, 0.88);
+      font-size: 15px;
+      line-height: 1.72;
+    }
+
+    .hero-panel {
+      position: relative;
+      padding: 22px;
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      border-radius: 24px;
+      background: rgba(255, 255, 255, 0.11);
+      backdrop-filter: blur(16px);
+    }
+
+    .hero-panel-title { margin: 0 0 14px; font-size: 14px; font-weight: 800; }
+    .hero-points { display: grid; gap: 10px; }
+
+    .hero-point {
+      display: grid;
+      min-height: 56px;
+      padding: 11px 13px;
+      grid-template-columns: 34px minmax(0, 1fr);
+      align-items: center;
+      gap: 11px;
+      border-radius: 17px;
+      background: rgba(255, 255, 255, 0.10);
+    }
+
+    .hero-point-icon {
+      display: grid;
+      width: 34px;
+      height: 34px;
+      place-items: center;
+      border-radius: 11px;
+      background: rgba(255, 255, 255, 0.14);
+      color: #f3f8dc;
+      font-size: 14px;
+      font-weight: 900;
+    }
+
+    .hero-point strong { display: block; font-size: 12px; }
+    .hero-point span { display: block; margin-top: 2px; color: rgba(255, 255, 255, 0.74); font-size: 11px; line-height: 1.4; }
+
+    .steps { display: grid; margin: 20px 0; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+
+    .step {
+      position: relative;
+      display: flex;
+      min-height: 70px;
+      padding: 12px 13px;
+      align-items: center;
+      gap: 10px;
+      border: 1px solid rgba(214, 231, 223, 0.95);
+      border-radius: 18px;
+      background: rgba(255, 255, 255, 0.80);
+      box-shadow: var(--shadow-soft);
+      backdrop-filter: blur(12px);
+    }
+
+    .step-number {
+      display: grid;
+      width: 34px;
+      height: 34px;
+      flex: 0 0 34px;
+      place-items: center;
+      border-radius: 12px;
+      background: linear-gradient(135deg, var(--emerald-100), var(--sky-100));
+      color: var(--emerald-800);
+      font-size: 13px;
+      font-weight: 900;
+    }
+
+    .step strong { display: block; font-size: 12px; }
+    .step span { display: block; margin-top: 2px; color: var(--muted); font-size: 10px; line-height: 1.35; }
+
+    .content-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.08fr) minmax(330px, 0.92fr);
+      gap: 22px;
+      align-items: start;
+    }
+
+    .card {
+      position: relative;
+      overflow: hidden;
+      border: 1px solid rgba(214, 231, 223, 0.96);
+      border-radius: var(--radius-xl);
+      background: var(--surface);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(16px);
+    }
+
+    .form-card { padding: 29px; }
+    .summary-card { position: sticky; top: 18px; }
+
+    .section-label {
+      display: inline-flex;
+      margin-bottom: 12px;
+      padding: 7px 11px;
+      align-items: center;
+      gap: 7px;
+      border-radius: 999px;
+      background: linear-gradient(135deg, var(--emerald-100), var(--sky-100));
+      color: var(--emerald-800);
+      font-size: 11px;
+      font-weight: 900;
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+    }
+
+    .card-title { margin: 0 0 7px; color: var(--emerald-900); font-size: 27px; font-weight: 850; letter-spacing: -0.025em; line-height: 1.15; }
+    .card-copy { margin: 0 0 22px; color: var(--muted); font-size: 13px; line-height: 1.7; }
+
+    .period-grid { display: grid; margin-bottom: 22px; grid-template-columns: 1fr 1fr; gap: 11px; }
+
+    .period-box {
+      position: relative;
+      overflow: hidden;
+      padding: 14px 15px;
+      border: 1px solid #d6e9df;
+      border-radius: 17px;
+      background: linear-gradient(135deg, rgba(239, 249, 244, 0.96), rgba(240, 249, 252, 0.96));
+    }
+
+    .period-box::after {
+      content: "";
+      position: absolute;
+      right: -15px;
+      bottom: -28px;
+      width: 70px;
+      height: 70px;
+      border: 1px solid rgba(54, 150, 108, 0.10);
+      border-radius: 20px;
+      transform: rotate(45deg);
+    }
+
+    .period-box span { display: block; margin-bottom: 5px; color: var(--muted); font-size: 9px; font-weight: 900; letter-spacing: 0.09em; text-transform: uppercase; }
+    .period-box strong { display: block; color: var(--emerald-800); font-size: 14px; }
+
+    .field { margin-bottom: 18px; }
+    .field-label { display: flex; margin-bottom: 8px; justify-content: space-between; gap: 10px; color: var(--ink); font-size: 13px; font-weight: 800; }
+    .required { color: var(--danger); }
+    .input-shell { position: relative; }
+
+    .input-shell::after {
+      content: "⌄";
+      position: absolute;
+      right: 16px;
+      top: 50%;
+      color: var(--muted);
+      font-size: 18px;
+      transform: translateY(-55%);
+      pointer-events: none;
+    }
+
+    select {
+      width: 100%;
+      min-height: 52px;
+      padding: 0 46px 0 15px;
+      appearance: none;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      outline: 0;
+      background: rgba(255, 255, 255, 0.96);
+      color: var(--ink);
+      transition: border-color .2s ease, box-shadow .2s ease, background .2s ease;
+    }
+
+    select:focus { border-color: var(--sky-600); box-shadow: 0 0 0 4px rgba(88, 169, 204, 0.15); }
+    select:disabled { background: #f3f6f4; color: #96a7a0; cursor: not-allowed; }
+
+    .status-options { display: grid; grid-template-columns: 1fr 1fr; gap: 11px; }
+    .status-option { position: relative; }
+    .status-option input { position: absolute; opacity: 0; pointer-events: none; }
+
+    .status-card {
+      display: flex;
+      min-height: 92px;
+      padding: 14px;
+      flex-direction: column;
+      justify-content: center;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: rgba(255, 255, 255, 0.96);
+      cursor: pointer;
+      transition: border-color .2s ease, box-shadow .2s ease, transform .2s ease, background .2s ease;
+    }
+
+    .status-card:hover { transform: translateY(-1px); }
+    .status-card strong { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+
+    .status-card strong::before {
+      content: "";
+      width: 10px;
+      height: 10px;
+      flex: 0 0 10px;
+      border: 2px solid #bdd6cb;
+      border-radius: 50%;
+      background: #fff;
+    }
+
+    .status-card small { display: block; margin-top: 6px; color: var(--muted); font-size: 10px; line-height: 1.45; }
+
+    .status-option input:checked + .status-card {
+      border-color: var(--sky-600);
+      background: linear-gradient(135deg, var(--emerald-50), var(--sky-50));
+      box-shadow: 0 0 0 4px rgba(88, 169, 204, 0.13);
+    }
+
+    .status-option input:checked + .status-card strong::before {
+      border-color: var(--emerald-600);
+      background: var(--emerald-600);
+      box-shadow: inset 0 0 0 2px #fff;
+    }
+
+    .submit-button {
+      display: flex;
+      width: 100%;
+      min-height: 55px;
+      margin-top: 8px;
+      padding: 0 18px;
+      align-items: center;
+      justify-content: center;
+      gap: 9px;
+      border: 0;
+      border-radius: 18px;
+      background: linear-gradient(135deg, var(--emerald-700), var(--sky-700));
+      color: #fff;
+      font-size: 13px;
+      font-weight: 900;
+      letter-spacing: 0.02em;
+      box-shadow: 0 14px 28px rgba(42, 124, 89, 0.20);
+      cursor: pointer;
+      transition: transform .2s ease, opacity .2s ease, box-shadow .2s ease;
+    }
+
+    .submit-button:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 17px 32px rgba(42, 124, 89, 0.24); }
+    .submit-button:disabled { opacity: .44; box-shadow: none; cursor: not-allowed; }
+
+    .privacy-note { display: flex; margin-top: 12px; align-items: flex-start; gap: 8px; color: var(--muted); font-size: 10px; line-height: 1.55; }
+
+    .summary-header {
+      position: relative;
+      overflow: hidden;
+      padding: 24px;
+      background: linear-gradient(135deg, var(--emerald-900), var(--sky-700));
+      color: #fff;
+    }
+
+    .summary-header::after {
+      content: "";
+      position: absolute;
+      right: -48px;
+      top: -55px;
+      width: 145px;
+      height: 145px;
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      border-radius: 38px;
+      transform: rotate(45deg);
+    }
+
+    .summary-header span {
+      display: inline-flex;
+      margin-bottom: 8px;
+      padding: 5px 9px;
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.09);
+      font-size: 9px;
+      font-weight: 900;
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+    }
+
+    .summary-header h2 { margin: 0; font-size: 21px; font-weight: 850; }
+    .summary-header p { max-width: 430px; margin: 7px 0 0; color: rgba(255, 255, 255, 0.78); font-size: 11px; line-height: 1.55; }
+    .summary-body { padding: 24px; }
+    .empty-state { padding: 34px 10px; color: var(--muted); text-align: center; font-size: 12px; line-height: 1.7; }
+
+    .empty-ornament {
+      position: relative;
+      display: grid;
+      width: 62px;
+      height: 62px;
+      margin: 0 auto 15px;
+      place-items: center;
+      border: 1px solid #d6e8df;
+      border-radius: 20px;
+      background: linear-gradient(135deg, var(--emerald-100), var(--sky-100));
+      color: var(--emerald-700);
+      font-size: 19px;
+      font-weight: 900;
+      transform: rotate(45deg);
+    }
+
+    .empty-ornament span { transform: rotate(-45deg); }
+    .detail-name { margin-bottom: 18px; color: var(--emerald-900); font-size: 24px; font-weight: 850; letter-spacing: -0.025em; line-height: 1.2; }
+
+    .quota-card {
+      margin-bottom: 18px;
+      padding: 15px;
+      border: 1px solid #dbe9dc;
+      border-radius: 17px;
+      background: linear-gradient(135deg, rgba(234, 243, 215, 0.74), rgba(223, 241, 248, 0.74));
+    }
+
+    .quota-top { display: flex; margin-bottom: 9px; justify-content: space-between; align-items: center; gap: 10px; font-size: 11px; font-weight: 800; }
+    .quota-value { color: var(--success); }
+    .quota-value.full { color: var(--danger); }
+    .quota-track { overflow: hidden; height: 9px; border-radius: 999px; background: #d7e5dd; }
+    .quota-fill { height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--emerald-600), var(--sky-600)); transition: width .35s ease; }
+    .quota-fill.full { background: linear-gradient(90deg, #cf6666, var(--danger)); }
+    .detail-list { display: grid; }
+    .detail-row { display: grid; padding: 11px 0; grid-template-columns: minmax(0, 1fr) auto; gap: 13px; align-items: start; border-bottom: 1px dashed var(--line); }
+    .detail-row:last-child { border-bottom: 0; }
+    .detail-label { color: var(--muted); font-size: 11px; }
+    .detail-value { max-width: 205px; color: var(--ink); font-size: 11px; font-weight: 800; line-height: 1.45; text-align: right; }
+
+    .total-box {
+      display: flex;
+      margin-top: 17px;
+      padding: 16px;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      border: 1px solid #d4e7dd;
+      border-radius: 18px;
+      background: linear-gradient(135deg, var(--emerald-50), var(--sky-50));
+    }
+
+    .total-box span { color: var(--emerald-800); font-size: 11px; font-weight: 800; }
+    .total-box strong { color: var(--emerald-900); font-size: 20px; font-weight: 900; }
+
+    .fee-note {
+      margin: 12px 0 0;
+      padding: 11px 12px;
+      border: 1px solid #eadcb9;
+      border-radius: 13px;
+      background: #fffaf0;
+      color: #806226;
+      font-size: 10px;
+      line-height: 1.55;
+    }
+
+    .alert { display: none; margin-bottom: 18px; padding: 13px 15px; border-radius: 15px; font-size: 11px; font-weight: 700; line-height: 1.55; }
+    .alert.show { display: block; }
+    .alert.error { border: 1px solid #efc8c8; background: var(--danger-soft); color: #9f3737; }
+    .alert.success { border: 1px solid #c5e8d6; background: var(--success-soft); color: var(--success); }
+    .footer { padding: 22px 10px 8px; color: var(--muted); text-align: center; font-size: 10px; line-height: 1.7; }
+
+    .loading-overlay, .modal-overlay {
+      display: none;
+      position: fixed;
+      z-index: 9999;
+      inset: 0;
+      padding: 18px;
+      align-items: center;
+      justify-content: center;
+      background: rgba(13, 49, 38, 0.38);
+      backdrop-filter: blur(5px);
+    }
+
+    .loading-overlay.show, .modal-overlay.show { display: flex; }
+
+    .loading-box {
+      min-width: 210px;
+      padding: 25px;
+      border: 1px solid rgba(214, 231, 223, 0.96);
+      border-radius: 22px;
+      background: #fff;
+      box-shadow: var(--shadow);
+      text-align: center;
+    }
+
+    .spinner {
+      width: 39px;
+      height: 39px;
+      margin: 0 auto 14px;
+      border: 4px solid var(--emerald-100);
+      border-top-color: var(--emerald-700);
+      border-radius: 50%;
+      animation: spin .8s linear infinite;
+    }
+
+    .loading-text { color: var(--muted); font-size: 11px; font-weight: 800; }
+
+    .success-modal {
+      width: min(510px, 100%);
+      max-height: calc(100vh - 36px);
+      overflow-y: auto;
+      border: 1px solid rgba(214, 231, 223, 0.96);
+      border-radius: 28px;
+      background: #fff;
+      box-shadow: var(--shadow);
+    }
+
+    .success-head {
+      position: relative;
+      overflow: hidden;
+      padding: 28px 25px 23px;
+      background: linear-gradient(135deg, var(--emerald-800), var(--sky-700));
+      color: #fff;
+      text-align: center;
+    }
+
+    .success-head::after {
+      content: "";
+      position: absolute;
+      right: -50px;
+      top: -50px;
+      width: 135px;
+      height: 135px;
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      border-radius: 36px;
+      transform: rotate(45deg);
+    }
+
+    .success-icon {
+      display: grid;
+      width: 58px;
+      height: 58px;
+      margin: 0 auto 14px;
+      place-items: center;
+      border: 1px solid rgba(255, 255, 255, 0.24);
+      border-radius: 19px;
+      background: rgba(255, 255, 255, 0.13);
+      font-size: 24px;
+      font-weight: 900;
+      transform: rotate(45deg);
+    }
+
+    .success-icon span { transform: rotate(-45deg); }
+    .success-head h2 { margin: 0; font-size: 23px; }
+    .success-head p { margin: 7px 0 0; color: rgba(255, 255, 255, 0.78); font-size: 11px; line-height: 1.5; }
+    .success-body { padding: 23px; }
+    .receipt { overflow: hidden; border: 1px solid var(--line); border-radius: 17px; background: #fbfdfc; }
+    .receipt-row { display: grid; padding: 11px 13px; grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr); gap: 12px; border-bottom: 1px dashed var(--line); }
+    .receipt-row:last-child { border-bottom: 0; }
+    .receipt-row span { color: var(--muted); font-size: 10px; }
+    .receipt-row strong { font-size: 10px; line-height: 1.45; text-align: right; }
+
+    .receipt-total {
+      display: flex;
+      margin-top: 13px;
+      padding: 14px;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      border-radius: 16px;
+      background: linear-gradient(135deg, var(--emerald-50), var(--sky-50));
+      color: var(--emerald-900);
+    }
+
+    .receipt-total span { font-size: 11px; font-weight: 800; }
+    .receipt-total strong { font-size: 20px; font-weight: 900; }
+    .modal-actions { display: grid; margin-top: 16px; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .modal-button { min-height: 46px; padding: 0 15px; border-radius: 15px; font-size: 11px; font-weight: 900; cursor: pointer; }
+    .modal-button.secondary { border: 1px solid var(--line); background: #fff; color: var(--emerald-800); }
+    .modal-button.primary { border: 0; background: linear-gradient(135deg, var(--emerald-700), var(--sky-700)); color: #fff; }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    @media (max-width: 920px) {
+      .hero-grid, .content-grid { grid-template-columns: 1fr; }
+      .summary-card { position: static; }
+      .steps { grid-template-columns: repeat(2, 1fr); }
+    }
+
+    @media (max-width: 620px) {
+      .page { padding: 12px; }
+      .topbar { min-height: 68px; padding: 9px 11px; border-radius: 18px; }
+      .school-logo { width: 48px; height: 48px; flex-basis: 48px; border-radius: 14px; }
+      .school-name strong { max-width: 185px; font-size: 12px; }
+      .school-name span { font-size: 8px; }
+      .period-chip { display: none; }
+      .hero { padding: 25px 19px; border-radius: 24px; }
+      .hero h1 { font-size: 32px; }
+      .hero-copy { font-size: 13px; }
+      .hero-panel { padding: 16px; border-radius: 19px; }
+      .steps { gap: 8px; }
+      .step { min-height: 65px; padding: 10px; border-radius: 15px; }
+      .step-number { width: 31px; height: 31px; flex-basis: 31px; }
+      .step span { display: none; }
+      .form-card { padding: 21px 16px; }
+      .card, .summary-card { border-radius: 24px; }
+      .card-title { font-size: 23px; }
+      .period-grid, .status-options { grid-template-columns: 1fr; }
+      .status-card { min-height: 78px; }
+      .summary-header, .summary-body { padding-left: 17px; padding-right: 17px; }
+      .detail-row { grid-template-columns: 1fr; gap: 4px; }
+      .detail-value { max-width: none; text-align: left; }
+      .total-box { align-items: flex-start; flex-direction: column; }
+      .modal-actions { grid-template-columns: 1fr; }
+      .receipt-row { grid-template-columns: 1fr; gap: 4px; }
+      .receipt-row strong { text-align: left; }
+    }
+
+    @media print {
+      body * { visibility: hidden; }
+      #successModal, #successModal * { visibility: visible; }
+      #successModal { position: absolute; inset: 0; display: block; padding: 0; background: #fff; }
+      .success-modal { width: 100%; max-height: none; border: 0; box-shadow: none; }
+      .modal-actions { display: none; }
+    }
+  </style>
+</head>
+
+<body>
+  <div class="loading-overlay" id="loadingOverlay">
+    <div class="loading-box">
+      <div class="spinner"></div>
+      <div class="loading-text" id="loadingText">Memuat data...</div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="successModal" role="dialog" aria-modal="true">
+    <div class="success-modal">
+      <div class="success-head">
+        <div class="success-icon"><span>✓</span></div>
+        <h2>Pendaftaran Berhasil</h2>
+        <p>Data telah tersimpan pada spreadsheet sekolah.</p>
+      </div>
+
+      <div class="success-body">
+        <div class="receipt" id="receiptContent"></div>
+
+        <div class="receipt-total">
+          <span>Total Pembayaran</span>
+          <strong id="receiptTotal">Rp0</strong>
+        </div>
+
+        <div class="modal-actions">
+          <button type="button" class="modal-button secondary" onclick="window.print()">Cetak Bukti</button>
+          <button type="button" class="modal-button primary" onclick="closeSuccessModal()">Selesai</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <main class="page">
+    <div class="container">
+      <header class="topbar">
+        <div class="school-brand">
+          <div class="school-logo">
+            <img src="logo_sd.png" alt="Logo sekolah" style="width:100%;height:100%;padding:5px;object-fit:contain;">
+          </div>
+          <div class="school-name">
+            <strong id="schoolName">SD Islam Tahfizh Cahaya Qur'an</strong>
+            <span>Sistem Pendaftaran Ekskul</span>
+          </div>
+        </div>
+        <div class="period-chip">Pendaftaran Aktif</div>
+      </header>
+
+      <section class="hero">
+        <div class="hero-grid">
+          <div>
+            <div class="hero-kicker">Tumbuh dalam iman dan prestasi</div>
+            <h1>Pendaftaran Ekstrakurikuler</h1>
+            <p class="hero-copy">
+              Pilih kegiatan yang sesuai dengan minat dan potensi siswa.
+              Informasi jadwal, lokasi, biaya, serta sisa kuota ditampilkan
+              otomatis dari data sekolah.
+            </p>
+          </div>
+
+          <div class="hero-panel">
+            <div class="hero-panel-title">Ketentuan Biaya</div>
+            <div class="hero-points">
+              <div class="hero-point">
+                <div class="hero-point-icon">01</div>
+                <div><strong>Pendaftar Baru</strong><span>Biaya pendaftaran dan biaya semester.</span></div>
+              </div>
+              <div class="hero-point">
+                <div class="hero-point-icon">02</div>
+                <div><strong>Melanjutkan Ekskul</strong><span>Hanya membayar biaya semester.</span></div>
+              </div>
+              <div class="hero-point">
+                <div class="hero-point-icon">03</div>
+                <div><strong>Kuota Real-Time</strong><span>Diperiksa ulang saat pendaftaran disimpan.</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="steps" aria-label="Tahapan pendaftaran">
+        <div class="step"><div class="step-number">1</div><div><strong>Pilih Kelas</strong><span>Data kelas dari spreadsheet.</span></div></div>
+        <div class="step"><div class="step-number">2</div><div><strong>Pilih Siswa</strong><span>Nama mengikuti kelas terpilih.</span></div></div>
+        <div class="step"><div class="step-number">3</div><div><strong>Pilih Status</strong><span>Baru atau melanjutkan.</span></div></div>
+        <div class="step"><div class="step-number">4</div><div><strong>Pilih Ekskul</strong><span>Lihat biaya dan sisa kuota.</span></div></div>
+      </section>
+
+      <div class="content-grid">
+        <section class="card form-card">
+          <div class="section-label">Formulir Siswa</div>
+          <h2 class="card-title">Lengkapi Data Pendaftaran</h2>
+          <p class="card-copy">
+            Pastikan kelas, nama siswa, status pendaftaran, dan pilihan
+            ekstrakurikuler sudah sesuai sebelum data disimpan.
+          </p>
+
+          <div class="alert" id="alertBox"></div>
+
+          <div class="period-grid">
+            <div class="period-box"><span>Tahun Ajaran</span><strong id="tahunAjaran">-</strong></div>
+            <div class="period-box"><span>Semester</span><strong id="semester">-</strong></div>
+          </div>
+
+          <form id="registrationForm">
+            <div class="field">
+              <label class="field-label" for="kelas"><span>Kelas <span class="required">*</span></span></label>
+              <div class="input-shell">
+                <select id="kelas" required>
+                  <option value="">Memuat daftar kelas...</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="field">
+              <label class="field-label" for="siswa"><span>Nama Siswa <span class="required">*</span></span></label>
+              <div class="input-shell">
+                <select id="siswa" required disabled>
+                  <option value="">Pilih kelas terlebih dahulu</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="field">
+              <div class="field-label"><span>Status Pendaftaran <span class="required">*</span></span></div>
+              <div class="status-options">
+                <label class="status-option">
+                  <input type="radio" name="status" value="Pendaftar Baru">
+                  <span class="status-card">
+                    <strong>Pendaftar Baru</strong>
+                    <small>Dikenakan biaya pendaftaran dan biaya semester.</small>
+                  </span>
+                </label>
+                <label class="status-option">
+                  <input type="radio" name="status" value="Melanjutkan Ekskul">
+                  <span class="status-card">
+                    <strong>Melanjutkan Ekskul</strong>
+                    <small>Tidak dikenakan biaya pendaftaran.</small>
+                  </span>
+                </label>
+              </div>
+            </div>
+
+            <div class="field">
+              <label class="field-label" for="ekskul"><span>Jenis Ekstrakurikuler <span class="required">*</span></span></label>
+              <div class="input-shell">
+                <select id="ekskul" required>
+                  <option value="">Memuat data ekstrakurikuler...</option>
+                </select>
+              </div>
+            </div>
+
+            <button type="submit" class="submit-button" id="submitButton" disabled>
+              Simpan Pendaftaran
+            </button>
+
+            <div class="privacy-note">
+              NIS dipakai sebagai identitas internal siswa dan tidak perlu diketik oleh orang tua.
+            </div>
+          </form>
+        </section>
+
+        <aside class="card summary-card">
+          <div class="summary-header">
+            <span>Rincian Pilihan</span>
+            <h2>Informasi Ekstrakurikuler</h2>
+            <p>Jadwal, lokasi, biaya, dan kuota tampil setelah ekskul dipilih.</p>
+          </div>
+
+          <div class="summary-body" id="summaryBody">
+            <div class="empty-state">
+              <div class="empty-ornament"><span>✦</span></div>
+              Pilih ekstrakurikuler untuk melihat rincian kegiatan,
+              biaya, dan sisa kuota.
+            </div>
+          </div>
+        </aside>
+      </div>
+
+      <footer class="footer">
+        SD Islam Tahfizh Cahaya Qur'an<br>
+        Sistem Pendaftaran Ekstrakurikuler
+      </footer>
+    </div>
+  </main>
+
+  <script>
+    // =====================================================================
+    // GANTI URL DI BAWAH INI dengan URL deploy Apps Script Anda
+    // (yang diakhiri /exec). Ambil dari: Deploy > Manage deployments
+    // =====================================================================
+    const SCRIPT_URL = "https://script.google.com/macros/s/GANTI_DENGAN_SCRIPT_ID_ANDA/exec";
+
+    const state = {
+      initialData: null,
+      selectedEkskul: null,
+      initialTimeout: null
     };
 
-    appendRegistration(data);
-    CacheService.getScriptCache().remove(CONFIG.CACHE_INITIAL_KEY);
-
-    return {
-      success: true,
-      message: "Pendaftaran berhasil disimpan.",
-      data: {
-        nis: student.nis,
-        nama: student.nama,
-        kelas: student.kelas,
-        status: status,
-        ekskul: ekskul.nama,
-        hari: ekskul.hari,
-        waktu: ekskul.waktu,
-        lokasi: ekskul.lokasi,
-        biayaPendaftaran: biayaPendaftaran,
-        biayaSemester: biayaSemester,
-        totalPembayaran: totalPembayaran,
-        sisaKuota: sisaSetelahDaftar,
-        tahunAjaran: CONFIG.TAHUN_AJARAN,
-        semester: CONFIG.SEMESTER
-      }
+    const elements = {
+      schoolName: document.getElementById("schoolName"),
+      kelas: document.getElementById("kelas"),
+      siswa: document.getElementById("siswa"),
+      ekskul: document.getElementById("ekskul"),
+      form: document.getElementById("registrationForm"),
+      submitButton: document.getElementById("submitButton"),
+      summaryBody: document.getElementById("summaryBody"),
+      alertBox: document.getElementById("alertBox"),
+      tahunAjaran: document.getElementById("tahunAjaran"),
+      semester: document.getElementById("semester"),
+      loadingOverlay: document.getElementById("loadingOverlay"),
+      loadingText: document.getElementById("loadingText"),
+      successModal: document.getElementById("successModal"),
+      receiptContent: document.getElementById("receiptContent"),
+      receiptTotal: document.getElementById("receiptTotal")
     };
 
-  } catch (error) {
-    return {
-      success: false,
-      message: error && error.message
-        ? error.message
-        : "Pendaftaran gagal disimpan."
-    };
-  } finally {
-    if (hasLock) {
-      lock.releaseLock();
-    }
-  }
-}
+    document.addEventListener("DOMContentLoaded", loadInitialData);
 
+    elements.kelas.addEventListener("change", handleClassChange);
+    elements.siswa.addEventListener("change", updateSubmitState);
+    elements.ekskul.addEventListener("change", handleEkskulChange);
+    elements.form.addEventListener("submit", submitForm);
 
-function getEkskulRecords() {
-  const sheet = getSheetOrThrow(CONFIG.SHEET_EKSKUL);
-  const values = sheet.getDataRange().getValues();
-
-  if (values.length < 2) {
-    return [];
-  }
-
-  const headers = values[0];
-
-  const ekskulIndex = findColumn(headers, [
-    "Ekskul",
-    "Nama Ekskul",
-    "Ekstrakurikuler"
-  ]);
-
-  const quotaIndex = findColumn(headers, ["Kuota"]);
-  const kbmIndex = findColumn(headers, ["Jumlah KBM", "KBM"]);
-
-  const registrationFeeIndex = findColumn(headers, [
-    "Biaya Pendaftaran",
-    "Biaya Pend",
-    "Biaya Daftar"
-  ]);
-
-  const semesterFeeIndex = findColumn(headers, [
-    "Biaya Semester",
-    "Biaya Per Semester",
-    "Biaya/Sem",
-    "Biaya Sem"
-  ]);
-
-  const dayIndex = findColumn(headers, ["Hari"]);
-  const timeIndex = findColumn(headers, ["Waktu", "Jam"]);
-  const locationIndex = findColumn(headers, ["Lokasi"]);
-  const activeIndex = findColumn(headers, ["Aktif", "Status Aktif"], false);
-
-  const inactiveValues = [
-    "TIDAK",
-    "TIDAK AKTIF",
-    "NON AKTIF",
-    "NONAKTIF",
-    "NO",
-    "FALSE",
-    "0"
-  ];
-
-  return values
-    .slice(1)
-    .map(row => {
-      const activeValue = activeIndex === -1
-        ? ""
-        : cleanText(row[activeIndex]).toUpperCase();
-
-      return {
-        nama: cleanText(row[ekskulIndex]),
-        kuota: toNumber(row[quotaIndex]),
-        jumlahKbm: toNumber(row[kbmIndex]),
-        biayaPendaftaran: toNumber(row[registrationFeeIndex]),
-        biayaSemester: toNumber(row[semesterFeeIndex]),
-        hari: cleanText(row[dayIndex]),
-        waktu: cleanText(row[timeIndex]),
-        lokasi: cleanText(row[locationIndex]),
-        aktif: !inactiveValues.includes(activeValue)
-      };
-    })
-    .filter(item => item.nama);
-}
-
-
-function findEkskulRecord(namaEkskul) {
-  const target = normalizeKey(namaEkskul);
-
-  return getEkskulRecords().find(
-    item => normalizeKey(item.nama) === target
-  ) || null;
-}
-
-
-function findStudentByNis(nis) {
-  const targetNis = cleanText(nis);
-  const sheet = getSheetOrThrow(CONFIG.SHEET_SISWA);
-  const values = sheet.getDataRange().getDisplayValues();
-
-  if (values.length < 2) {
-    return null;
-  }
-
-  const nisIndex = findColumn(values[0], ["NIS"]);
-  const nameIndex = findColumn(values[0], ["Nama Siswa", "Nama"]);
-  const classIndex = findColumn(values[0], ["Kelas"]);
-
-  const row = values
-    .slice(1)
-    .find(item => cleanText(item[nisIndex]) === targetNis);
-
-  if (!row) {
-    return null;
-  }
-
-  return {
-    nis: cleanText(row[nisIndex]),
-    nama: cleanText(row[nameIndex]),
-    kelas: cleanText(row[classIndex])
-  };
-}
-
-
-function countRegistrations(namaEkskul) {
-  const rows = getRegistrationRows();
-  const targetEkskul = normalizeKey(namaEkskul);
-
-  return rows.filter(item =>
-    normalizeKey(item["Ekskul"]) === targetEkskul &&
-    cleanText(item["Tahun Ajaran"]) === CONFIG.TAHUN_AJARAN &&
-    cleanText(item["Semester"]) === CONFIG.SEMESTER
-  ).length;
-}
-
-
-function buildRegistrationCountMap(rows) {
-  return rows.reduce((result, item) => {
-    if (
-      cleanText(item["Tahun Ajaran"]) !== CONFIG.TAHUN_AJARAN ||
-      cleanText(item["Semester"]) !== CONFIG.SEMESTER
-    ) {
-      return result;
-    }
-
-    const key = normalizeKey(item["Ekskul"]);
-
-    if (key) {
-      result[key] = (result[key] || 0) + 1;
-    }
-
-    return result;
-  }, {});
-}
-
-
-function isDuplicateRegistration(nis, namaEkskul) {
-  const targetNis = cleanText(nis);
-  const targetEkskul = normalizeKey(namaEkskul);
-
-  return getRegistrationRows().some(item =>
-    cleanText(item["NIS"]) === targetNis &&
-    normalizeKey(item["Ekskul"]) === targetEkskul &&
-    cleanText(item["Tahun Ajaran"]) === CONFIG.TAHUN_AJARAN &&
-    cleanText(item["Semester"]) === CONFIG.SEMESTER
-  );
-}
-
-
-function getRegistrationRows() {
-  ensureRegistrationSheet();
-
-  const sheet = getSheetOrThrow(CONFIG.SHEET_PENDAFTARAN);
-  const values = sheet.getDataRange().getValues();
-
-  if (values.length < 2) {
-    return [];
-  }
-
-  const headers = values[0].map(cleanText);
-
-  return values
-    .slice(1)
-    .filter(row => row.some(cell => cleanText(cell) !== ""))
-    .map(row => {
-      const item = {};
-      headers.forEach((header, index) => {
-        item[header] = row[index];
+    document.querySelectorAll('input[name="status"]').forEach(input => {
+      input.addEventListener("change", () => {
+        renderEkskulDetail();
+        updateSubmitState();
       });
-      return item;
     });
-}
+
+    elements.successModal.addEventListener("click", event => {
+      if (event.target === elements.successModal) {
+        closeSuccessModal();
+      }
+    });
 
 
-function appendRegistration(data) {
-  const sheet = getSheetOrThrow(CONFIG.SHEET_PENDAFTARAN);
-  const headers = sheet
-    .getRange(1, 1, 1, sheet.getLastColumn())
-    .getDisplayValues()[0]
-    .map(cleanText);
+    // -------------------------------------------------------------------
+    // GANTI: dulu pakai google.script.run, sekarang pakai fetch() biasa.
+    // GET tidak memicu preflight CORS, jadi aman dipanggil dari domain
+    // manapun (termasuk GitHub Pages) tanpa masalah.
+    // -------------------------------------------------------------------
+    function loadInitialData() {
+      clearAlert();
 
-  const row = headers.map(header =>
-    Object.prototype.hasOwnProperty.call(data, header)
-      ? data[header]
-      : ""
-  );
+      elements.submitButton.disabled = true;
+      elements.submitButton.textContent = "Memuat data...";
 
-  sheet.appendRow(row);
+      state.initialTimeout = window.setTimeout(() => {
+        showAlert(
+          "Data belum selesai dimuat. Periksa koneksi lalu muat ulang halaman.",
+          "error"
+        );
+      }, 15000);
 
-  const lastRow = sheet.getLastRow();
-  const timestampIndex = headers.indexOf("Timestamp");
-  const moneyHeaders = [
-    "Biaya Pendaftaran",
-    "Biaya Semester",
-    "Total Pembayaran"
-  ];
+      fetch(SCRIPT_URL + "?action=getInitialData")
+        .then(response => response.json())
+        .then(result => {
+          window.clearTimeout(state.initialTimeout);
 
-  if (timestampIndex !== -1) {
-    sheet
-      .getRange(lastRow, timestampIndex + 1)
-      .setNumberFormat("dd/MM/yyyy HH:mm:ss");
-  }
+          if (!result.success) {
+            throw new Error(result.message || "Gagal memuat data.");
+          }
 
-  moneyHeaders.forEach(header => {
-    const index = headers.indexOf(header);
-    if (index !== -1) {
-      sheet
-        .getRange(lastRow, index + 1)
-        .setNumberFormat('"Rp" #,##0');
+          const data = result.data;
+          state.initialData = data;
+
+          elements.schoolName.textContent =
+            data.schoolName || "SD Islam Tahfizh Cahaya Qur'an";
+
+          elements.tahunAjaran.textContent = data.tahunAjaran || "-";
+          elements.semester.textContent = data.semester || "-";
+
+          populateClasses(data.kelas || []);
+          populateEkskul(data.ekskul || []);
+
+          elements.submitButton.textContent = "Simpan Pendaftaran";
+          updateSubmitState();
+        })
+        .catch(error => {
+          window.clearTimeout(state.initialTimeout);
+          elements.submitButton.textContent = "Simpan Pendaftaran";
+          handleError(error);
+        });
     }
-  });
-}
 
 
-function ensureRegistrationSheet() {
-  const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
-  let sheet = spreadsheet.getSheetByName(CONFIG.SHEET_PENDAFTARAN);
+    function populateClasses(classes) {
+      elements.kelas.innerHTML = '<option value="">Pilih kelas</option>';
 
-  if (!sheet) {
-    sheet = spreadsheet.insertSheet(CONFIG.SHEET_PENDAFTARAN);
-  }
-
-  if (sheet.getLastRow() === 0 || sheet.getLastColumn() === 0) {
-    sheet
-      .getRange(1, 1, 1, CONFIG.HEADERS_PENDAFTARAN.length)
-      .setValues([CONFIG.HEADERS_PENDAFTARAN]);
-
-    formatRegistrationSheet(sheet);
-    return;
-  }
-
-  const lastColumn = sheet.getLastColumn();
-  const existingHeaders = sheet
-    .getRange(1, 1, 1, lastColumn)
-    .getDisplayValues()[0]
-    .map(cleanText);
-
-  const missingHeaders = CONFIG.HEADERS_PENDAFTARAN.filter(
-    header => !existingHeaders.includes(header)
-  );
-
-  if (missingHeaders.length > 0) {
-    sheet
-      .getRange(1, lastColumn + 1, 1, missingHeaders.length)
-      .setValues([missingHeaders]);
-
-    formatRegistrationSheet(sheet);
-  }
-}
-
-
-function formatRegistrationSheet(sheet) {
-  const lastColumn = sheet.getLastColumn();
-
-  if (lastColumn === 0) {
-    return;
-  }
-
-  sheet
-    .getRange(1, 1, 1, lastColumn)
-    .setFontWeight("bold")
-    .setHorizontalAlignment("center")
-    .setBackground("#dff4e8")
-    .setFontColor("#11633a");
-
-  sheet.setFrozenRows(1);
-}
-
-
-function clearDataCache() {
-  CacheService.getScriptCache().remove(CONFIG.CACHE_INITIAL_KEY);
-  return "Cache data pendaftaran sudah dibersihkan.";
-}
-
-
-function getSheetOrThrow(sheetName) {
-  const sheet = SpreadsheetApp
-    .getActiveSpreadsheet()
-    .getSheetByName(sheetName);
-
-  if (!sheet) {
-    throw new Error(
-      'Sheet "' + sheetName + '" tidak ditemukan. Periksa kembali nama sheet.'
-    );
-  }
-
-  return sheet;
-}
-
-
-function findColumn(headers, possibleNames, required) {
-  const isRequired = required !== false;
-  const normalizedHeaders = headers.map(normalizeHeader);
-
-  for (const name of possibleNames) {
-    const index = normalizedHeaders.indexOf(normalizeHeader(name));
-
-    if (index !== -1) {
-      return index;
+      classes.forEach(className => {
+        const option = document.createElement("option");
+        option.value = className;
+        option.textContent = className;
+        elements.kelas.appendChild(option);
+      });
     }
-  }
-
-  if (!isRequired) {
-    return -1;
-  }
-
-  throw new Error(
-    'Kolom "' + possibleNames[0] + '" tidak ditemukan pada spreadsheet.'
-  );
-}
 
 
-function normalizeHeader(value) {
-  return cleanText(value)
-    .toLowerCase()
-    .replace(/\s+/g, " ")
-    .replace(/\s*\/\s*/g, "/");
-}
+    function populateEkskul(extracurriculars) {
+      elements.ekskul.innerHTML = '<option value="">Pilih ekstrakurikuler</option>';
+
+      extracurriculars.forEach(item => {
+        const option = document.createElement("option");
+        option.value = item.nama;
+        option.disabled = Number(item.sisaKuota) <= 0;
+
+        option.textContent =
+          Number(item.sisaKuota) <= 0
+            ? item.nama + " — Kuota penuh"
+            : item.nama + " — Sisa " + item.sisaKuota;
+
+        elements.ekskul.appendChild(option);
+      });
+    }
 
 
-function normalizeKey(value) {
-  return cleanText(value).toLowerCase();
-}
+    function handleClassChange() {
+      clearAlert();
+
+      const selectedClass = elements.kelas.value;
+      elements.siswa.innerHTML = '<option value="">Pilih nama siswa</option>';
+
+      if (!selectedClass || !state.initialData) {
+        elements.siswa.innerHTML = '<option value="">Pilih kelas terlebih dahulu</option>';
+        elements.siswa.disabled = true;
+        updateSubmitState();
+        return;
+      }
+
+      const students =
+        state.initialData.studentsByClass &&
+        state.initialData.studentsByClass[selectedClass]
+          ? state.initialData.studentsByClass[selectedClass]
+          : [];
+
+      students.forEach(student => {
+        const option = document.createElement("option");
+        option.value = student.nis;
+        option.textContent = student.nama;
+        elements.siswa.appendChild(option);
+      });
+
+      elements.siswa.disabled = students.length === 0;
+
+      if (students.length === 0) {
+        elements.siswa.innerHTML = '<option value="">Tidak ada siswa pada kelas ini</option>';
+      }
+
+      updateSubmitState();
+    }
 
 
-function cleanText(value) {
-  if (value === null || value === undefined) {
-    return "";
-  }
+    function handleEkskulChange() {
+      clearAlert();
 
-  return String(value).trim();
-}
+      const selectedName = elements.ekskul.value;
+
+      if (!selectedName || !state.initialData) {
+        state.selectedEkskul = null;
+        renderEkskulDetail();
+        updateSubmitState();
+        return;
+      }
+
+      state.selectedEkskul =
+        (state.initialData.ekskul || []).find(item => item.nama === selectedName) || null;
+
+      renderEkskulDetail();
+      updateSubmitState();
+    }
 
 
-function toNumber(value) {
-  if (typeof value === "number" && !isNaN(value)) {
-    return value;
-  }
+    function getSelectedStatus() {
+      const selected = document.querySelector('input[name="status"]:checked');
+      return selected ? selected.value : "";
+    }
 
-  const cleaned = cleanText(value).replace(/[^\d-]/g, "");
-  const number = Number(cleaned);
 
-  return isNaN(number) ? 0 : number;
-}
+    function renderEkskulDetail() {
+      const item = state.selectedEkskul;
+
+      if (!item) {
+        elements.summaryBody.innerHTML = `
+          <div class="empty-state">
+            <div class="empty-ornament"><span>✦</span></div>
+            Pilih ekstrakurikuler untuk melihat rincian kegiatan,
+            biaya, dan sisa kuota.
+          </div>
+        `;
+        return;
+      }
+
+      const status = getSelectedStatus();
+
+      const registrationFee =
+        status === "Melanjutkan Ekskul" ? 0 : Number(item.biayaPendaftaran || 0);
+
+      const semesterFee = Number(item.biayaSemester || 0);
+      const total = registrationFee + semesterFee;
+      const usedQuota = Number(item.kuota) - Number(item.sisaKuota);
+
+      const percentage =
+        Number(item.kuota) > 0
+          ? Math.min((usedQuota / Number(item.kuota)) * 100, 100)
+          : 100;
+
+      const isFull = Number(item.sisaKuota) <= 0;
+
+      let statusNote = "Pilih status pendaftaran untuk melihat total pembayaran.";
+
+      if (status === "Melanjutkan Ekskul") {
+        statusNote = "Siswa yang melanjutkan ekskul hanya membayar biaya semester.";
+      }
+
+      if (status === "Pendaftar Baru") {
+        statusNote = "Pendaftar baru membayar biaya pendaftaran dan biaya semester.";
+      }
+
+      elements.summaryBody.innerHTML = `
+        <div class="detail-name">${escapeHtml(item.nama)}</div>
+
+        <div class="quota-card">
+          <div class="quota-top">
+            <span>Kuota pendaftaran</span>
+            <span class="quota-value ${isFull ? "full" : ""}">
+              ${isFull ? "Kuota penuh" : "Sisa " + item.sisaKuota + " dari " + item.kuota}
+            </span>
+          </div>
+          <div class="quota-track">
+            <div class="quota-fill ${isFull ? "full" : ""}" style="width:${percentage}%"></div>
+          </div>
+        </div>
+
+        <div class="detail-list">
+          ${detailRow("Jumlah KBM", item.jumlahKbm + " pertemuan")}
+          ${detailRow("Hari", item.hari || "-")}
+          ${detailRow("Waktu", item.waktu || "-")}
+          ${detailRow("Lokasi", item.lokasi || "-")}
+          ${detailRow("Biaya pendaftaran", registrationFee === 0 ? "Rp0" : formatCurrency(registrationFee))}
+          ${detailRow("Biaya semester", formatCurrency(semesterFee))}
+        </div>
+
+        <div class="total-box">
+          <span>Total pembayaran</span>
+          <strong>${status ? formatCurrency(total) : "-"}</strong>
+        </div>
+
+        <p class="fee-note">${escapeHtml(statusNote)}</p>
+      `;
+    }
+
+
+    function detailRow(label, value) {
+      return `
+        <div class="detail-row">
+          <div class="detail-label">${escapeHtml(label)}</div>
+          <div class="detail-value">${escapeHtml(String(value))}</div>
+        </div>
+      `;
+    }
+
+
+    function updateSubmitState() {
+      const hasClass = Boolean(elements.kelas.value);
+      const hasStudent = Boolean(elements.siswa.value);
+      const hasStatus = Boolean(getSelectedStatus());
+      const hasEkskul = Boolean(elements.ekskul.value);
+
+      const hasQuota =
+        state.selectedEkskul && Number(state.selectedEkskul.sisaKuota) > 0;
+
+      elements.submitButton.disabled = !(
+        hasClass && hasStudent && hasStatus && hasEkskul && hasQuota
+      );
+    }
+
+
+    // -------------------------------------------------------------------
+    // GANTI: submitRegistration sekarang lewat fetch() POST.
+    // Content-Type SENGAJA "text/plain" (bukan application/json) supaya
+    // browser TIDAK mengirim preflight OPTIONS, karena Apps Script Web App
+    // tidak mendukung preflight itu. Body-nya tetap teks JSON biasa,
+    // dan di sisi server (doPost) di-parse manual dengan JSON.parse().
+    // -------------------------------------------------------------------
+    function submitForm(event) {
+      event.preventDefault();
+      clearAlert();
+
+      const payload = {
+        nis: elements.siswa.value,
+        status: getSelectedStatus(),
+        ekskul: elements.ekskul.value
+      };
+
+      elements.submitButton.disabled = true;
+
+      fetch(SCRIPT_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "text/plain;charset=utf-8"
+        },
+        body: JSON.stringify({
+          action: "submitRegistration",
+          payload: payload
+        })
+      })
+        .then(response => response.json())
+        .then(result => {
+          if (!result.success) {
+            throw new Error(result.message || "Pendaftaran gagal disimpan.");
+          }
+
+          showSuccessModal(result.data);
+          resetForm();
+          refreshInitialDataSilently();
+        })
+        .catch(handleError);
+    }
+
+
+    function showSuccessModal(data) {
+      elements.receiptContent.innerHTML = [
+        receiptRow("NIS", data.nis),
+        receiptRow("Nama Siswa", data.nama),
+        receiptRow("Kelas", data.kelas),
+        receiptRow("Status", data.status),
+        receiptRow("Ekstrakurikuler", data.ekskul),
+        receiptRow("Hari", data.hari || "-"),
+        receiptRow("Waktu", data.waktu || "-"),
+        receiptRow("Lokasi", data.lokasi || "-"),
+        receiptRow("Biaya Pendaftaran", formatCurrency(data.biayaPendaftaran)),
+        receiptRow("Biaya Semester", formatCurrency(data.biayaSemester)),
+        receiptRow("Periode", data.semester + " " + data.tahunAjaran),
+        receiptRow("Sisa Kuota", data.sisaKuota + " siswa")
+      ].join("");
+
+      elements.receiptTotal.textContent = formatCurrency(data.totalPembayaran);
+
+      elements.successModal.classList.add("show");
+      document.body.classList.add("modal-open");
+    }
+
+
+    function receiptRow(label, value) {
+      return `
+        <div class="receipt-row">
+          <span>${escapeHtml(label)}</span>
+          <strong>${escapeHtml(String(value))}</strong>
+        </div>
+      `;
+    }
+
+
+    function closeSuccessModal() {
+      elements.successModal.classList.remove("show");
+      document.body.classList.remove("modal-open");
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+
+
+    function resetForm() {
+      elements.form.reset();
+      elements.kelas.value = "";
+
+      elements.siswa.innerHTML = '<option value="">Pilih kelas terlebih dahulu</option>';
+      elements.siswa.disabled = true;
+      state.selectedEkskul = null;
+
+      renderEkskulDetail();
+      updateSubmitState();
+    }
+
+
+    function refreshInitialDataSilently() {
+      fetch(SCRIPT_URL + "?action=getInitialData&forceRefresh=true")
+        .then(response => response.json())
+        .then(result => {
+          if (!result.success) return;
+
+          const data = result.data;
+          state.initialData = data;
+
+          populateClasses(data.kelas || []);
+          populateEkskul(data.ekskul || []);
+
+          elements.kelas.value = "";
+          elements.siswa.innerHTML = '<option value="">Pilih kelas terlebih dahulu</option>';
+          elements.siswa.disabled = true;
+        })
+        .catch(() => {});
+    }
+
+
+    function formatCurrency(value) {
+      return new Intl.NumberFormat("id-ID", {
+        style: "currency",
+        currency: "IDR",
+        maximumFractionDigits: 0
+      }).format(Number(value || 0));
+    }
+
+
+    function showAlert(message, type) {
+      elements.alertBox.textContent = message;
+      elements.alertBox.className = "alert show " + type;
+    }
+
+
+    function clearAlert() {
+      elements.alertBox.textContent = "";
+      elements.alertBox.className = "alert";
+    }
+
+
+    function showLoading(message) {
+      elements.loadingText.textContent = message || "Memproses data...";
+      elements.loadingOverlay.classList.add("show");
+    }
+
+
+    function hideLoading() {
+      elements.loadingOverlay.classList.remove("show");
+    }
+
+
+    function handleError(error) {
+      hideLoading();
+
+      const message =
+        error && error.message
+          ? error.message.replace(/^Exception:\s*/i, "")
+          : "Terjadi kesalahan. Silakan coba kembali.";
+
+      showAlert(message, "error");
+      updateSubmitState();
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+
+
+    function escapeHtml(value) {
+      return String(value)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+    }
+  </script>
+</body>
+</html>
