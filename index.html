@@ -1,0 +1,760 @@
+const CONFIG = Object.freeze({
+  SCHOOL_NAME: "SD Islam Tahfizh Cahaya Qur'an",
+  SHEET_SISWA: "Master_Siswa",
+  SHEET_EKSKUL: "Master_Ekskul",
+  SHEET_PENDAFTARAN: "Pendaftaran",
+
+  // PENTING: ubah dua nilai ini setiap pergantian tahun ajaran / semester.
+  TAHUN_AJARAN: "2026/2027",
+  SEMESTER: "Ganjil",
+
+  STATUS_BARU: "Pendaftar Baru",
+  STATUS_LANJUT: "Melanjutkan Ekskul",
+
+  CACHE_INITIAL_KEY: "EKSKUL_INITIAL_V2",
+  CACHE_SECONDS: 120,
+
+  HEADERS_PENDAFTARAN: [
+    "Timestamp",
+    "NIS",
+    "Nama Siswa",
+    "Kelas",
+    "Status Pendaftaran",
+    "Ekskul",
+    "Kuota Awal",
+    "Sisa Kuota",
+    "Biaya Pendaftaran",
+    "Biaya Semester",
+    "Total Pembayaran",
+    "Tahun Ajaran",
+    "Semester",
+    "Status Pembayaran"
+  ]
+});
+
+
+/* =========================================================
+ * ENTRY POINTS WEB APP (API MODE)
+ * =========================================================
+ * doGet   -> dipakai untuk MENGAMBIL data (getInitialData)
+ *            dipanggil dari frontend pakai: fetch(URL + "?action=getInitialData")
+ * doPost  -> dipakai untuk MENGIRIM data (submitRegistration, clearCache)
+ *            dipanggil dari frontend pakai: fetch(URL, { method: "POST", ... })
+ *
+ * PENTING soal CORS:
+ * - Request GET dari browser TIDAK memicu preflight, jadi aman.
+ * - Request POST harus dikirim dengan header
+ *     Content-Type: "text/plain;charset=utf-8"
+ *   (BUKAN application/json), supaya browser tidak mengirim
+ *   preflight OPTIONS yang tidak didukung Apps Script.
+ *   Body-nya tetap teks JSON biasa, nanti di-parse manual di doPost().
+ * ========================================================= */
+
+function doGet(e) {
+  try {
+    const action = (e && e.parameter && e.parameter.action) || "getInitialData";
+
+    if (action === "ping") {
+      return jsonResponse({ success: true, message: "pong" });
+    }
+
+    if (action === "getEkskulDetail") {
+      const nama = e.parameter.nama || "";
+      const detail = getEkskulDetail(nama);
+      return jsonResponse({ success: true, data: detail });
+    }
+
+    // default: getInitialData
+    const forceRefresh = e.parameter.forceRefresh === "true";
+    const data = getInitialData(forceRefresh);
+    return jsonResponse({ success: true, data: data });
+
+  } catch (error) {
+    return jsonResponse({
+      success: false,
+      message: error && error.message ? error.message : "Terjadi kesalahan."
+    });
+  }
+}
+
+
+function doPost(e) {
+  try {
+    if (!e || !e.postData || !e.postData.contents) {
+      throw new Error("Request tidak berisi data.");
+    }
+
+    const body = JSON.parse(e.postData.contents);
+    const action = body.action;
+
+    if (action === "submitRegistration") {
+      const result = submitRegistration(body.payload || {});
+      return jsonResponse(result);
+    }
+
+    if (action === "clearCache") {
+      const message = clearDataCache();
+      return jsonResponse({ success: true, message: message });
+    }
+
+    throw new Error("Action tidak dikenali: " + action);
+
+  } catch (error) {
+    return jsonResponse({
+      success: false,
+      message: error && error.message ? error.message : "Pendaftaran gagal disimpan."
+    });
+  }
+}
+
+
+/**
+ * Helper untuk selalu mengembalikan JSON dengan format konsisten.
+ * ContentService dari Apps Script Web App otomatis mengizinkan
+ * akses cross-origin untuk response ini, jadi bisa dipanggil
+ * dari domain lain (misalnya GitHub Pages) tanpa masalah CORS
+ * selama request-nya GET, atau POST dengan Content-Type text/plain.
+ */
+function jsonResponse(obj) {
+  return ContentService
+    .createTextOutput(JSON.stringify(obj))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+
+/**
+ * Mengambil seluruh data awal dalam satu kali proses.
+ * Hasil disimpan sementara di cache agar permintaan berikutnya jauh lebih cepat.
+ */
+function getInitialData(forceRefresh) {
+  const cache = CacheService.getScriptCache();
+
+  if (!forceRefresh) {
+    const cached = cache.get(CONFIG.CACHE_INITIAL_KEY);
+
+    if (cached) {
+      try {
+        return JSON.parse(cached);
+      } catch (error) {
+        cache.remove(CONFIG.CACHE_INITIAL_KEY);
+      }
+    }
+  }
+
+  ensureRegistrationSheet();
+
+  const students = getStudentRecords();
+  const studentsByClass = {};
+  const classSet = new Set();
+
+  students.forEach(student => {
+    classSet.add(student.kelas);
+
+    if (!studentsByClass[student.kelas]) {
+      studentsByClass[student.kelas] = [];
+    }
+
+    studentsByClass[student.kelas].push({
+      nis: student.nis,
+      nama: student.nama
+    });
+  });
+
+  Object.keys(studentsByClass).forEach(kelas => {
+    studentsByClass[kelas].sort((a, b) =>
+      a.nama.localeCompare(b.nama, "id")
+    );
+  });
+
+  const registrationRows = getRegistrationRows();
+  const counts = buildRegistrationCountMap(registrationRows);
+
+  const data = {
+    schoolName: CONFIG.SCHOOL_NAME,
+    tahunAjaran: CONFIG.TAHUN_AJARAN,
+    semester: CONFIG.SEMESTER,
+
+    kelas: [...classSet].sort((a, b) =>
+      a.localeCompare(b, "id", {
+        numeric: true,
+        sensitivity: "base"
+      })
+    ),
+
+    studentsByClass: studentsByClass,
+
+    ekskul: getEkskulRecords()
+      .filter(item => item.aktif)
+      .map(item => {
+        const jumlahTerdaftar = counts[normalizeKey(item.nama)] || 0;
+
+        return {
+          nama: item.nama,
+          kuota: item.kuota,
+          jumlahTerdaftar: jumlahTerdaftar,
+          sisaKuota: Math.max(item.kuota - jumlahTerdaftar, 0),
+          jumlahKbm: item.jumlahKbm,
+          biayaPendaftaran: item.biayaPendaftaran,
+          biayaSemester: item.biayaSemester,
+          hari: item.hari,
+          waktu: item.waktu,
+          lokasi: item.lokasi
+        };
+      })
+      .sort((a, b) => a.nama.localeCompare(b.nama, "id"))
+  };
+
+  try {
+    cache.put(
+      CONFIG.CACHE_INITIAL_KEY,
+      JSON.stringify(data),
+      CONFIG.CACHE_SECONDS
+    );
+  } catch (error) {
+    // Form tetap bekerja meskipun cache sementara gagal disimpan.
+  }
+
+  return data;
+}
+
+
+function getStudentRecords() {
+  const sheet = getSheetOrThrow(CONFIG.SHEET_SISWA);
+  const values = sheet.getDataRange().getDisplayValues();
+
+  if (values.length < 2) {
+    return [];
+  }
+
+  const headers = values[0];
+  const nisIndex = findColumn(headers, ["NIS"]);
+  const nameIndex = findColumn(headers, ["Nama Siswa", "Nama"]);
+  const classIndex = findColumn(headers, ["Kelas"]);
+
+  return values
+    .slice(1)
+    .map(row => ({
+      nis: cleanText(row[nisIndex]),
+      nama: cleanText(row[nameIndex]),
+      kelas: cleanText(row[classIndex])
+    }))
+    .filter(student =>
+      student.nis &&
+      student.nama &&
+      student.kelas
+    );
+}
+
+
+function getEkskulDetail(namaEkskul) {
+  ensureRegistrationSheet();
+
+  const ekskul = findEkskulRecord(namaEkskul);
+
+  if (!ekskul) {
+    throw new Error("Data ekstrakurikuler tidak ditemukan.");
+  }
+
+  if (!ekskul.aktif) {
+    throw new Error("Ekstrakurikuler sedang tidak aktif.");
+  }
+
+  const jumlahTerdaftar = countRegistrations(ekskul.nama);
+  const sisaKuota = Math.max(ekskul.kuota - jumlahTerdaftar, 0);
+
+  return {
+    nama: ekskul.nama,
+    kuota: ekskul.kuota,
+    jumlahTerdaftar: jumlahTerdaftar,
+    sisaKuota: sisaKuota,
+    jumlahKbm: ekskul.jumlahKbm,
+    biayaPendaftaran: ekskul.biayaPendaftaran,
+    biayaSemester: ekskul.biayaSemester,
+    hari: ekskul.hari,
+    waktu: ekskul.waktu,
+    lokasi: ekskul.lokasi
+  };
+}
+
+
+/**
+ * Menyimpan pendaftaran secara aman.
+ * Kuota, duplikasi, siswa, dan biaya selalu divalidasi ulang di server.
+ */
+function submitRegistration(formData) {
+  const lock = LockService.getScriptLock();
+  let hasLock = false;
+
+  try {
+    lock.waitLock(30000);
+    hasLock = true;
+
+    ensureRegistrationSheet();
+
+    const nis = cleanText(formData && formData.nis);
+    const status = cleanText(formData && formData.status);
+    const namaEkskul = cleanText(formData && formData.ekskul);
+
+    if (!nis) {
+      throw new Error("Silakan pilih nama siswa.");
+    }
+
+    if (!namaEkskul) {
+      throw new Error("Silakan pilih ekstrakurikuler.");
+    }
+
+    if (![CONFIG.STATUS_BARU, CONFIG.STATUS_LANJUT].includes(status)) {
+      throw new Error("Status pendaftaran tidak valid.");
+    }
+
+    const student = findStudentByNis(nis);
+
+    if (!student) {
+      throw new Error("Data siswa tidak ditemukan pada Master_Siswa.");
+    }
+
+    const ekskul = findEkskulRecord(namaEkskul);
+
+    if (!ekskul) {
+      throw new Error("Data ekstrakurikuler tidak ditemukan.");
+    }
+
+    if (!ekskul.aktif) {
+      throw new Error("Ekstrakurikuler sedang tidak menerima pendaftaran.");
+    }
+
+    if (isDuplicateRegistration(student.nis, ekskul.nama)) {
+      throw new Error(
+        student.nama +
+        " sudah terdaftar pada " +
+        ekskul.nama +
+        " untuk " +
+        CONFIG.SEMESTER +
+        " " +
+        CONFIG.TAHUN_AJARAN +
+        "."
+      );
+    }
+
+    const jumlahTerdaftar = countRegistrations(ekskul.nama);
+    const sisaSebelumDaftar = ekskul.kuota - jumlahTerdaftar;
+
+    if (sisaSebelumDaftar <= 0) {
+      throw new Error(
+        "Kuota " + ekskul.nama + " sudah penuh. Silakan pilih ekskul lain."
+      );
+    }
+
+    const biayaPendaftaran =
+      status === CONFIG.STATUS_BARU
+        ? ekskul.biayaPendaftaran
+        : 0;
+
+    const biayaSemester = ekskul.biayaSemester;
+    const totalPembayaran = biayaPendaftaran + biayaSemester;
+    const sisaSetelahDaftar = sisaSebelumDaftar - 1;
+
+    const data = {
+      "Timestamp": new Date(),
+      "NIS": student.nis,
+      "Nama Siswa": student.nama,
+      "Kelas": student.kelas,
+      "Status Pendaftaran": status,
+      "Ekskul": ekskul.nama,
+      "Kuota Awal": ekskul.kuota,
+      "Sisa Kuota": sisaSetelahDaftar,
+      "Biaya Pendaftaran": biayaPendaftaran,
+      "Biaya Semester": biayaSemester,
+      "Total Pembayaran": totalPembayaran,
+      "Tahun Ajaran": CONFIG.TAHUN_AJARAN,
+      "Semester": CONFIG.SEMESTER,
+      "Status Pembayaran": "Belum Bayar"
+    };
+
+    appendRegistration(data);
+    CacheService.getScriptCache().remove(CONFIG.CACHE_INITIAL_KEY);
+
+    return {
+      success: true,
+      message: "Pendaftaran berhasil disimpan.",
+      data: {
+        nis: student.nis,
+        nama: student.nama,
+        kelas: student.kelas,
+        status: status,
+        ekskul: ekskul.nama,
+        hari: ekskul.hari,
+        waktu: ekskul.waktu,
+        lokasi: ekskul.lokasi,
+        biayaPendaftaran: biayaPendaftaran,
+        biayaSemester: biayaSemester,
+        totalPembayaran: totalPembayaran,
+        sisaKuota: sisaSetelahDaftar,
+        tahunAjaran: CONFIG.TAHUN_AJARAN,
+        semester: CONFIG.SEMESTER
+      }
+    };
+
+  } catch (error) {
+    return {
+      success: false,
+      message: error && error.message
+        ? error.message
+        : "Pendaftaran gagal disimpan."
+    };
+  } finally {
+    if (hasLock) {
+      lock.releaseLock();
+    }
+  }
+}
+
+
+function getEkskulRecords() {
+  const sheet = getSheetOrThrow(CONFIG.SHEET_EKSKUL);
+  const values = sheet.getDataRange().getValues();
+
+  if (values.length < 2) {
+    return [];
+  }
+
+  const headers = values[0];
+
+  const ekskulIndex = findColumn(headers, [
+    "Ekskul",
+    "Nama Ekskul",
+    "Ekstrakurikuler"
+  ]);
+
+  const quotaIndex = findColumn(headers, ["Kuota"]);
+  const kbmIndex = findColumn(headers, ["Jumlah KBM", "KBM"]);
+
+  const registrationFeeIndex = findColumn(headers, [
+    "Biaya Pendaftaran",
+    "Biaya Pend",
+    "Biaya Daftar"
+  ]);
+
+  const semesterFeeIndex = findColumn(headers, [
+    "Biaya Semester",
+    "Biaya Per Semester",
+    "Biaya/Sem",
+    "Biaya Sem"
+  ]);
+
+  const dayIndex = findColumn(headers, ["Hari"]);
+  const timeIndex = findColumn(headers, ["Waktu", "Jam"]);
+  const locationIndex = findColumn(headers, ["Lokasi"]);
+  const activeIndex = findColumn(headers, ["Aktif", "Status Aktif"], false);
+
+  const inactiveValues = [
+    "TIDAK",
+    "TIDAK AKTIF",
+    "NON AKTIF",
+    "NONAKTIF",
+    "NO",
+    "FALSE",
+    "0"
+  ];
+
+  return values
+    .slice(1)
+    .map(row => {
+      const activeValue = activeIndex === -1
+        ? ""
+        : cleanText(row[activeIndex]).toUpperCase();
+
+      return {
+        nama: cleanText(row[ekskulIndex]),
+        kuota: toNumber(row[quotaIndex]),
+        jumlahKbm: toNumber(row[kbmIndex]),
+        biayaPendaftaran: toNumber(row[registrationFeeIndex]),
+        biayaSemester: toNumber(row[semesterFeeIndex]),
+        hari: cleanText(row[dayIndex]),
+        waktu: cleanText(row[timeIndex]),
+        lokasi: cleanText(row[locationIndex]),
+        aktif: !inactiveValues.includes(activeValue)
+      };
+    })
+    .filter(item => item.nama);
+}
+
+
+function findEkskulRecord(namaEkskul) {
+  const target = normalizeKey(namaEkskul);
+
+  return getEkskulRecords().find(
+    item => normalizeKey(item.nama) === target
+  ) || null;
+}
+
+
+function findStudentByNis(nis) {
+  const targetNis = cleanText(nis);
+  const sheet = getSheetOrThrow(CONFIG.SHEET_SISWA);
+  const values = sheet.getDataRange().getDisplayValues();
+
+  if (values.length < 2) {
+    return null;
+  }
+
+  const nisIndex = findColumn(values[0], ["NIS"]);
+  const nameIndex = findColumn(values[0], ["Nama Siswa", "Nama"]);
+  const classIndex = findColumn(values[0], ["Kelas"]);
+
+  const row = values
+    .slice(1)
+    .find(item => cleanText(item[nisIndex]) === targetNis);
+
+  if (!row) {
+    return null;
+  }
+
+  return {
+    nis: cleanText(row[nisIndex]),
+    nama: cleanText(row[nameIndex]),
+    kelas: cleanText(row[classIndex])
+  };
+}
+
+
+function countRegistrations(namaEkskul) {
+  const rows = getRegistrationRows();
+  const targetEkskul = normalizeKey(namaEkskul);
+
+  return rows.filter(item =>
+    normalizeKey(item["Ekskul"]) === targetEkskul &&
+    cleanText(item["Tahun Ajaran"]) === CONFIG.TAHUN_AJARAN &&
+    cleanText(item["Semester"]) === CONFIG.SEMESTER
+  ).length;
+}
+
+
+function buildRegistrationCountMap(rows) {
+  return rows.reduce((result, item) => {
+    if (
+      cleanText(item["Tahun Ajaran"]) !== CONFIG.TAHUN_AJARAN ||
+      cleanText(item["Semester"]) !== CONFIG.SEMESTER
+    ) {
+      return result;
+    }
+
+    const key = normalizeKey(item["Ekskul"]);
+
+    if (key) {
+      result[key] = (result[key] || 0) + 1;
+    }
+
+    return result;
+  }, {});
+}
+
+
+function isDuplicateRegistration(nis, namaEkskul) {
+  const targetNis = cleanText(nis);
+  const targetEkskul = normalizeKey(namaEkskul);
+
+  return getRegistrationRows().some(item =>
+    cleanText(item["NIS"]) === targetNis &&
+    normalizeKey(item["Ekskul"]) === targetEkskul &&
+    cleanText(item["Tahun Ajaran"]) === CONFIG.TAHUN_AJARAN &&
+    cleanText(item["Semester"]) === CONFIG.SEMESTER
+  );
+}
+
+
+function getRegistrationRows() {
+  ensureRegistrationSheet();
+
+  const sheet = getSheetOrThrow(CONFIG.SHEET_PENDAFTARAN);
+  const values = sheet.getDataRange().getValues();
+
+  if (values.length < 2) {
+    return [];
+  }
+
+  const headers = values[0].map(cleanText);
+
+  return values
+    .slice(1)
+    .filter(row => row.some(cell => cleanText(cell) !== ""))
+    .map(row => {
+      const item = {};
+      headers.forEach((header, index) => {
+        item[header] = row[index];
+      });
+      return item;
+    });
+}
+
+
+function appendRegistration(data) {
+  const sheet = getSheetOrThrow(CONFIG.SHEET_PENDAFTARAN);
+  const headers = sheet
+    .getRange(1, 1, 1, sheet.getLastColumn())
+    .getDisplayValues()[0]
+    .map(cleanText);
+
+  const row = headers.map(header =>
+    Object.prototype.hasOwnProperty.call(data, header)
+      ? data[header]
+      : ""
+  );
+
+  sheet.appendRow(row);
+
+  const lastRow = sheet.getLastRow();
+  const timestampIndex = headers.indexOf("Timestamp");
+  const moneyHeaders = [
+    "Biaya Pendaftaran",
+    "Biaya Semester",
+    "Total Pembayaran"
+  ];
+
+  if (timestampIndex !== -1) {
+    sheet
+      .getRange(lastRow, timestampIndex + 1)
+      .setNumberFormat("dd/MM/yyyy HH:mm:ss");
+  }
+
+  moneyHeaders.forEach(header => {
+    const index = headers.indexOf(header);
+    if (index !== -1) {
+      sheet
+        .getRange(lastRow, index + 1)
+        .setNumberFormat('"Rp" #,##0');
+    }
+  });
+}
+
+
+function ensureRegistrationSheet() {
+  const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = spreadsheet.getSheetByName(CONFIG.SHEET_PENDAFTARAN);
+
+  if (!sheet) {
+    sheet = spreadsheet.insertSheet(CONFIG.SHEET_PENDAFTARAN);
+  }
+
+  if (sheet.getLastRow() === 0 || sheet.getLastColumn() === 0) {
+    sheet
+      .getRange(1, 1, 1, CONFIG.HEADERS_PENDAFTARAN.length)
+      .setValues([CONFIG.HEADERS_PENDAFTARAN]);
+
+    formatRegistrationSheet(sheet);
+    return;
+  }
+
+  const lastColumn = sheet.getLastColumn();
+  const existingHeaders = sheet
+    .getRange(1, 1, 1, lastColumn)
+    .getDisplayValues()[0]
+    .map(cleanText);
+
+  const missingHeaders = CONFIG.HEADERS_PENDAFTARAN.filter(
+    header => !existingHeaders.includes(header)
+  );
+
+  if (missingHeaders.length > 0) {
+    sheet
+      .getRange(1, lastColumn + 1, 1, missingHeaders.length)
+      .setValues([missingHeaders]);
+
+    formatRegistrationSheet(sheet);
+  }
+}
+
+
+function formatRegistrationSheet(sheet) {
+  const lastColumn = sheet.getLastColumn();
+
+  if (lastColumn === 0) {
+    return;
+  }
+
+  sheet
+    .getRange(1, 1, 1, lastColumn)
+    .setFontWeight("bold")
+    .setHorizontalAlignment("center")
+    .setBackground("#dff4e8")
+    .setFontColor("#11633a");
+
+  sheet.setFrozenRows(1);
+}
+
+
+function clearDataCache() {
+  CacheService.getScriptCache().remove(CONFIG.CACHE_INITIAL_KEY);
+  return "Cache data pendaftaran sudah dibersihkan.";
+}
+
+
+function getSheetOrThrow(sheetName) {
+  const sheet = SpreadsheetApp
+    .getActiveSpreadsheet()
+    .getSheetByName(sheetName);
+
+  if (!sheet) {
+    throw new Error(
+      'Sheet "' + sheetName + '" tidak ditemukan. Periksa kembali nama sheet.'
+    );
+  }
+
+  return sheet;
+}
+
+
+function findColumn(headers, possibleNames, required) {
+  const isRequired = required !== false;
+  const normalizedHeaders = headers.map(normalizeHeader);
+
+  for (const name of possibleNames) {
+    const index = normalizedHeaders.indexOf(normalizeHeader(name));
+
+    if (index !== -1) {
+      return index;
+    }
+  }
+
+  if (!isRequired) {
+    return -1;
+  }
+
+  throw new Error(
+    'Kolom "' + possibleNames[0] + '" tidak ditemukan pada spreadsheet.'
+  );
+}
+
+
+function normalizeHeader(value) {
+  return cleanText(value)
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .replace(/\s*\/\s*/g, "/");
+}
+
+
+function normalizeKey(value) {
+  return cleanText(value).toLowerCase();
+}
+
+
+function cleanText(value) {
+  if (value === null || value === undefined) {
+    return "";
+  }
+
+  return String(value).trim();
+}
+
+
+function toNumber(value) {
+  if (typeof value === "number" && !isNaN(value)) {
+    return value;
+  }
+
+  const cleaned = cleanText(value).replace(/[^\d-]/g, "");
+  const number = Number(cleaned);
+
+  return isNaN(number) ? 0 : number;
+}
